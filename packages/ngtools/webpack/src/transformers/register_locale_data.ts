@@ -14,14 +14,15 @@ import { makeTransform } from './make_transform';
 
 export function registerLocaleData(
   shouldTransform: (fileName: string) => boolean,
-  getEntryModule: () => { path: string, className: string } | null,
-  locale: string,
+  getEntryModule: (i: number) => { path: string, className: string } | null,
+  entryModuleIdx: number,
+  locale: string
 ): ts.TransformerFactory<ts.SourceFile> {
 
   const standardTransform: StandardTransform = function (sourceFile: ts.SourceFile) {
     const ops: TransformOperation[] = [];
 
-    const entryModule = getEntryModule();
+    const entryModule = getEntryModule(entryModuleIdx);
 
     if (!shouldTransform(sourceFile.fileName) || !entryModule || !locale) {
       return ops;

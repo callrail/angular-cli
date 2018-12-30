@@ -15,14 +15,15 @@ import { makeTransform } from './make_transform';
 
 export function replaceBootstrap(
   shouldTransform: (fileName: string) => boolean,
-  getEntryModule: () => { path: string, className: string } | null,
+  getEntryModule: (i: number) => { path: string, className: string } | null,
+  entryModuleIdx: number,
   getTypeChecker: () => ts.TypeChecker,
 ): ts.TransformerFactory<ts.SourceFile> {
 
   const standardTransform: StandardTransform = function (sourceFile: ts.SourceFile) {
     const ops: TransformOperation[] = [];
 
-    const entryModule = getEntryModule();
+    const entryModule = getEntryModule(entryModuleIdx);
 
     if (!shouldTransform(sourceFile.fileName) || !entryModule) {
       return ops;

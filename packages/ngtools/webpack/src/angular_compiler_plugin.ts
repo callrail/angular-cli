@@ -89,7 +89,7 @@ export interface AngularCompilerPluginOptions {
   sourceMap?: boolean;
   tsConfigPath: string;
   basePath?: string;
-  entryModule?: string;
+  entryModule?: string | string[];
   mainPath?: string;
   skipCodeGeneration?: boolean;
   hostReplacementPaths?: { [path: string]: string } | ((path: string) => string);
@@ -137,7 +137,7 @@ export class AngularCompilerPlugin {
   // Contains `moduleImportPath#exportName` => `fullModulePath`.
   private _lazyRoutes: LazyRouteMap = Object.create(null);
   private _tsConfigPath: string;
-  private _entryModule: string | null;
+  private _entryModule: string[] | null;
   private _mainPath: string | undefined;
   private _basePath: string;
   private _transformers: ts.TransformerFactory<ts.SourceFile>[] = [];
@@ -170,15 +170,18 @@ export class AngularCompilerPlugin {
 
   get options() { return this._options; }
   get done() { return this._donePromise; }
-  get entryModule() {
+  get entryModule(): { path: string, className: string }[] {
     if (!this._entryModule) {
       return null;
     }
-    const splitted = this._entryModule.split(/(#[a-zA-Z_]([\w]+))$/);
-    const path = splitted[0];
-    const className = !!splitted[1] ? splitted[1].substring(1) : 'default';
 
-    return { path, className };
+    return this._entryModule.map((entryModule) => {
+      const splitted = entryModule.split(/(#[a-zA-Z_]([\w]+))$/);
+      const path = splitted[0];
+      const className = !!splitted[1] ? splitted[1].substring(1) : 'default';
+
+      return { path, className };
+    });
   }
 
   get typeChecker(): ts.TypeChecker | null {
@@ -304,10 +307,17 @@ export class AngularCompilerPlugin {
     // Use entryModule if available in options, otherwise resolve it from mainPath after program
     // creation.
     if (this._options.entryModule) {
-      this._entryModule = this._options.entryModule;
+      this._entryModule = Array.isArray(this._options.entryModule) ?
+        this._options.entryModule : [this._options.entryModule];
     } else if (this._compilerOptions.entryModule) {
-      this._entryModule = path.resolve(this._basePath,
-        this._compilerOptions.entryModule as string); // temporary cast for type issue
+      if (Array.isArray(this._compilerOptions.entryModule)) {
+        this._entryModule = (<string[]>this._compilerOptions.entryModule).map((entryModule) => {
+          return path.resolve(this._basePath, entryModule);
+        })
+      } else {
+        this._entryModule = [path.resolve(this._basePath,
+          this._compilerOptions.entryModule as string)]; // temporary cast for type issue
+      }
     }
 
     // Set platform.
@@ -434,9 +444,13 @@ export class AngularCompilerPlugin {
         host: this._compilerHost,
       });
 
-      lazyRoutes = ngProgram.listLazyRoutes(
-        this.entryModule.path + '#' + this.entryModule.className,
-      );
+      this.entryModule.forEach((entryModule) => {
+        ngProgram.listLazyRoutes(
+          entryModule.path + '#' + entryModule.className,
+        ).forEach((lazyRoute) => {
+          lazyRoutes.push(lazyRoute);
+        });
+      });
     } else {
       lazyRoutes = (this._program as Program).listLazyRoutes();
     }
@@ -829,9 +843,12 @@ export class AngularCompilerPlugin {
     const isMainPath = (fileName: string) => fileName === (
       this._mainPath ? workaroundResolve(this._mainPath) : this._mainPath
     );
-    const getEntryModule = () => this.entryModule
-      ? { path: workaroundResolve(this.entryModule.path), className: this.entryModule.className }
-      : this.entryModule;
+    const getEntryModule = (i: number) => this.entryModule[i]
+      ? { path: workaroundResolve(this.entryModule[i].path), className: this.entryModule[i].className }
+      : this.entryModule[i];
+    const entryModulesIdxs = Array.from(
+      Array(this.entryModule ? this.entryModule.length : 0).keys()
+    );
     const getLazyRoutes = () => this._lazyRoutes;
     const getTypeChecker = () => (this._getTsProgram() as ts.Program).getTypeChecker();
 
@@ -851,20 +868,26 @@ export class AngularCompilerPlugin {
         // This transform must go before replaceBootstrap because it looks for the entry module
         // import, which will be replaced.
         if (this._normalizedLocale) {
-          this._transformers.push(registerLocaleData(isAppPath, getEntryModule,
-            this._normalizedLocale));
+          entryModulesIdxs.forEach((idx) => {
+            this._transformers.push(registerLocaleData(isAppPath, getEntryModule, idx,
+              this._normalizedLocale));
+          })
         }
 
         if (!this._JitMode) {
           // Replace bootstrap in browser AOT.
-          this._transformers.push(replaceBootstrap(isAppPath, getEntryModule, getTypeChecker));
+          entryModulesIdxs.forEach((idx) => {
+            this._transformers.push(replaceBootstrap(isAppPath, getEntryModule, idx, getTypeChecker));
+          })
         }
       } else if (this._platform === PLATFORM.Server) {
         this._transformers.push(exportLazyModuleMap(isMainPath, getLazyRoutes));
         if (!this._JitMode) {
-          this._transformers.push(
-            exportNgFactory(isMainPath, getEntryModule),
-            replaceServerBootstrap(isMainPath, getEntryModule, getTypeChecker));
+          entryModulesIdxs.forEach((idx) => {
+            this._transformers.push(
+              exportNgFactory(isMainPath, getEntryModule, idx),
+              replaceServerBootstrap(isMainPath, getEntryModule, idx, getTypeChecker));
+          })
         }
       }
     }
